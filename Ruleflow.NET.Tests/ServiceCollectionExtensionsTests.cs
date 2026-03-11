@@ -1,5 +1,7 @@
 using System;
+using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using MediatR;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,6 +13,8 @@ using Ruleflow.NET.Engine.Validation.Interfaces;
 using Ruleflow.NET.Engine.Data.Enums;
 using Ruleflow.NET.Engine.Data.Mapping;
 using Ruleflow.NET.Engine.Events;
+using Ruleflow.NET.Engine.Cqrs.Commands;
+using Ruleflow.NET.Engine.Cqrs.Queries;
 
 namespace Ruleflow.NET.Tests
 {
@@ -121,5 +125,34 @@ namespace Ruleflow.NET.Tests
 
             Assert.AreNotSame(NullLogger<EventHub.EventHubLog>.Instance, EventHub.Logger);
         }
+        [TestMethod]
+        public async Task AddRuleflow_RegistersMediatorHandlers_ForRuleCommandsAndQueries()
+        {
+            var services = new ServiceCollection();
+            services.AddRuleflow<Person>();
+            var provider = services.BuildServiceProvider();
+
+            var mediator = provider.GetRequiredService<IMediator>();
+
+            var rule = Ruleflow.NET.Engine.Models.Rule.Builder.RuleBuilderFactory
+                .CreateUnifiedRuleBuilder<Person>()
+                .WithRuleId("person.age.rule")
+                .WithValidation((p, ctx) => p.Age >= 18)
+                .Build();
+
+            var registered = await mediator.Send(new RegisterRuleCommand<Person>(rule));
+            Assert.IsTrue(registered);
+
+            var fetched = await mediator.Send(new GetRuleByIdQuery<Person>("person.age.rule"));
+            Assert.IsNotNull(fetched);
+            Assert.AreEqual("person.age.rule", fetched.RuleId);
+
+            var all = await mediator.Send(new GetAllRulesQuery<Person>());
+            Assert.AreEqual(1, all.Count);
+
+            var unregistered = await mediator.Send(new UnregisterRuleCommand<Person>("person.age.rule"));
+            Assert.IsTrue(unregistered);
+        }
+
     }
 }
