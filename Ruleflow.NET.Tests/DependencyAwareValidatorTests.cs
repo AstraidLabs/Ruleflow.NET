@@ -5,6 +5,8 @@ using Ruleflow.NET.Engine.Validation.Enums;
 using Ruleflow.NET.Engine.Validation.Interfaces;
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Threading;
 
 namespace Ruleflow.NET.Tests
 {
@@ -370,5 +372,103 @@ namespace Ruleflow.NET.Tests
             Assert.ThrowsException<InvalidOperationException>(() =>
                 new DependencyAwareValidator<UserProfile>(new[] { ruleA, ruleB }));
         }
+
+
+        [TestMethod]
+        public void DependencyAwareValidator_ParallelStages_ExecutesIndependentRulesConcurrentlyAndDeterministically()
+        {
+            var executionOrder = new List<string>();
+            var gate = new ManualResetEventSlim(false);
+
+            var slowRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("RuleB")
+                .WithPriority(10)
+                .WithAction(_ =>
+                {
+                    gate.Wait();
+                    lock (executionOrder) executionOrder.Add("RuleB");
+                })
+                .Build();
+
+            var fastRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("RuleA")
+                .WithPriority(10)
+                .WithAction(_ =>
+                {
+                    lock (executionOrder) executionOrder.Add("RuleA");
+                    gate.Set();
+                })
+                .Build();
+
+            var dependentRule = RuleflowExtensions.CreateDependentRule<UserProfile>("RuleC")
+                .DependsOn("RuleA", "RuleB")
+                .WithDependencyType(DependencyType.RequiresAllSuccess)
+                .WithAction(_ =>
+                {
+                    lock (executionOrder) executionOrder.Add("RuleC");
+                })
+                .Build();
+
+            var validator = new DependencyAwareValidator<UserProfile>(
+                new[] { slowRule, fastRule, dependentRule },
+                options: new DependencyAwareValidatorOptions<UserProfile>
+                {
+                    EnableParallelStages = true,
+                    MaxDegreeOfParallelism = 2
+                });
+
+            var result = validator.CollectValidationResults(new UserProfile { Username = "john", Email = "john@example.com" });
+
+            Assert.IsTrue(result.IsValid);
+            CollectionAssert.AreEqual(new[] { "RuleA", "RuleB", "RuleC" }, executionOrder);
+        }
+
+        [TestMethod]
+        public void DependencyAwareValidator_Hooks_AreInvokedForStartSuccessFailureAndSkip()
+        {
+            var events = new ConcurrentQueue<string>();
+
+            var successRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("SuccessRule")
+                .WithAction(_ => { })
+                .Build();
+
+            var failedRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("FailedRule")
+                .WithAction(_ => throw new InvalidOperationException("boom"))
+                .Build();
+
+            var skippedRule = RuleflowExtensions.CreateDependentRule<UserProfile>("SkippedRule")
+                .DependsOn("SuccessRule")
+                .WithDependencyType(DependencyType.RequiresAnyFailure)
+                .WithAction(_ => throw new InvalidOperationException("should not run"))
+                .Build();
+
+            var validator = new DependencyAwareValidator<UserProfile>(
+                new[] { successRule, failedRule, skippedRule },
+                options: new DependencyAwareValidatorOptions<UserProfile>
+                {
+                    Hooks = new RuleExecutionHooks<UserProfile>
+                    {
+                        OnRuleStart = id => events.Enqueue($"start:{id}"),
+                        OnRuleSuccess = id => events.Enqueue($"success:{id}"),
+                        OnRuleFailure = (id, _) => events.Enqueue($"failure:{id}"),
+                        OnRuleSkipped = id => events.Enqueue($"skipped:{id}")
+                    }
+                });
+
+            var result = validator.CollectValidationResults(new UserProfile { Username = "john", Email = "john@example.com" });
+
+            Assert.IsFalse(result.IsValid);
+            CollectionAssert.AreEquivalent(
+                new[]
+                {
+                    "start:SuccessRule", "success:SuccessRule",
+                    "start:FailedRule", "failure:FailedRule",
+                    "skipped:SkippedRule"
+                },
+                events.ToArray());
+        }
+
     }
 }

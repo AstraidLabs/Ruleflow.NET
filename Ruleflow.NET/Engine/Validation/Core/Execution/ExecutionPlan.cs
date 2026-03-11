@@ -8,10 +8,12 @@ namespace Ruleflow.NET.Engine.Validation.Core.Execution
     public sealed class ExecutionPlan<T>
     {
         public IReadOnlyList<ExecutionPlanStep<T>> Steps { get; }
+        public IReadOnlyList<IReadOnlyList<ExecutionPlanStep<T>>> Stages { get; }
 
-        public ExecutionPlan(IEnumerable<ExecutionPlanStep<T>> steps)
+        public ExecutionPlan(IEnumerable<ExecutionPlanStep<T>> steps, IEnumerable<IReadOnlyList<ExecutionPlanStep<T>>>? stages = null)
         {
             Steps = steps.ToArray();
+            Stages = stages?.ToArray() ?? new[] { Steps };
         }
 
         public static ExecutionPlan<T> CreateSequential(IEnumerable<Interfaces.IValidationRule<T>> rules)
@@ -21,7 +23,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Execution
                 .Select(r => new ExecutionPlanStep<T>(r.Id, r.Priority, r.Severity, r.Validate))
                 .ToArray();
 
-            return new ExecutionPlan<T>(steps);
+            return new ExecutionPlan<T>(steps, new[] { steps });
         }
 
         public static ExecutionPlan<T> CreateDependencyAware(IEnumerable<Interfaces.IValidationRule<T>> rules)
@@ -49,15 +51,32 @@ namespace Ruleflow.NET.Engine.Validation.Core.Execution
             }
 
             var ordered = new List<Interfaces.IValidationRule<T>>(map.Count);
+            var stageRules = new List<IReadOnlyList<Interfaces.IValidationRule<T>>>();
             while (queue.TryDequeue(out var current, out _))
             {
-                ordered.Add(current);
-                foreach (var next in outgoing[current.Id])
+                var currentStage = new List<Interfaces.IValidationRule<T>> { current };
+                while (queue.TryDequeue(out var sameStageRule, out _))
                 {
-                    incoming[next]--;
-                    if (incoming[next] == 0)
+                    currentStage.Add(sameStageRule);
+                }
+
+                var orderedStage = currentStage
+                    .OrderByDescending(r => r.Priority)
+                    .ThenBy(r => r.Id, StringComparer.Ordinal)
+                    .ToArray();
+
+                stageRules.Add(orderedStage);
+                ordered.AddRange(orderedStage);
+
+                foreach (var stageRule in orderedStage)
+                {
+                    foreach (var next in outgoing[stageRule.Id])
                     {
-                        queue.Enqueue(map[next], -map[next].Priority);
+                        incoming[next]--;
+                        if (incoming[next] == 0)
+                        {
+                            queue.Enqueue(map[next], -map[next].Priority);
+                        }
                     }
                 }
             }
@@ -67,7 +86,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Execution
                 throw new InvalidOperationException("Circular dependency detected");
             }
 
-            var steps = ordered.Select(r =>
+            var stepMap = ordered.Select(r =>
             {
                 if (r is DependentValidationRule<T> dependent)
                 {
@@ -82,9 +101,14 @@ namespace Ruleflow.NET.Engine.Validation.Core.Execution
                 }
 
                 return new ExecutionPlanStep<T>(r.Id, r.Priority, r.Severity, r.Validate);
-            });
+            }).ToDictionary(s => s.RuleId, StringComparer.Ordinal);
 
-            return new ExecutionPlan<T>(steps);
+            var steps = ordered.Select(r => stepMap[r.Id]).ToArray();
+            var stages = stageRules
+                .Select(stage => (IReadOnlyList<ExecutionPlanStep<T>>)stage.Select(rule => stepMap[rule.Id]).ToArray())
+                .ToArray();
+
+            return new ExecutionPlan<T>(steps, stages);
         }
     }
 }

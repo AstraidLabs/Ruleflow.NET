@@ -119,5 +119,31 @@ namespace Ruleflow.NET.Tests
             Assert.AreEqual(30, data["age"].Value);
             Assert.AreEqual(1, context.Values.Count);
         }
+
+        [TestMethod]
+        public void InvalidateCompiledAccessorCache_AllowsRemappingAfterCacheReset()
+        {
+            var rules = new[]
+            {
+                new DataMappingRule<Person>(p => p.Name, "name", DataType.String, true),
+                new DataMappingRule<Person>(p => p.Age, "age", DataType.Int32, true)
+            };
+
+            var mapper = new DataAutoMapper<Person>(rules);
+            var context = new DataContext();
+
+            var first = mapper.MapToData(new Person { Name = "Before", Age = 20 }, context);
+            Assert.AreEqual("Before", first["name"].Value);
+
+            DataAutoMapper<Person>.InvalidateCompiledAccessorCache();
+
+            var second = mapper.MapToObject(
+                new Dictionary<string, string> { { "name", "After" }, { "age", "21" } },
+                new DataContext());
+
+            Assert.AreEqual("After", second.Name);
+            Assert.AreEqual(21, second.Age);
+        }
+
     }
 }
