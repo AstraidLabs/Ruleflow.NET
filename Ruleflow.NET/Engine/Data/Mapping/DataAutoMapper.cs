@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using Ruleflow.NET.Engine.Data.Enums;
 using Ruleflow.NET.Engine.Data;
 using Ruleflow.NET.Engine.Data.Interfaces;
@@ -13,6 +15,8 @@ namespace Ruleflow.NET.Engine.Data.Mapping
     /// </summary>
     public class DataAutoMapper<T> : IDataAutoMapper<T>
     {
+        private static readonly ConcurrentDictionary<string, Func<T, object?>> GetterCache = new(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, Action<T, object?>> SetterCache = new(StringComparer.Ordinal);
         private readonly List<DataMappingRule<T>> _rules;
 
         /// <summary>
@@ -23,6 +27,16 @@ namespace Ruleflow.NET.Engine.Data.Mapping
         {
             var profile = Engine.Extensions.AttributeRuleLoader.LoadProfile<T>();
             return new DataAutoMapper<T>(profile.MappingRules);
+        }
+
+        /// <summary>
+        /// Explicitly clears compiled getter/setter delegate cache for <typeparamref name="T"/>.
+        /// Use when mapping rules are changed dynamically.
+        /// </summary>
+        public static void InvalidateCompiledAccessorCache()
+        {
+            GetterCache.Clear();
+            SetterCache.Clear();
         }
 
         /// <summary>
@@ -55,7 +69,8 @@ namespace Ruleflow.NET.Engine.Data.Mapping
                 if (!DataConverter.TryConvert(raw, rule.Type, out var value) || value == null)
                     throw new DataMappingException($"Failed to convert key '{rule.Key}' to type {rule.Type}.");
 
-                rule.Property.SetValue(obj, value.Value);
+                var setter = GetOrCreateSetter(rule);
+                setter(obj, value.Value);
                 context.Set(rule.Key, value);
             }
 
@@ -74,7 +89,8 @@ namespace Ruleflow.NET.Engine.Data.Mapping
 
             foreach (var rule in _rules)
             {
-                var raw = rule.Property.GetValue(obj);
+                var getter = GetOrCreateGetter(rule);
+                var raw = getter(obj);
                 if (raw == null)
                 {
                     if (rule.IsRequired)
@@ -89,6 +105,32 @@ namespace Ruleflow.NET.Engine.Data.Mapping
 
             return result;
         }
+
+        private static Func<T, object?> GetOrCreateGetter(DataMappingRule<T> rule)
+        {
+            return GetterCache.GetOrAdd(BuildAccessorCacheKey(rule), _ =>
+            {
+                var target = Expression.Parameter(typeof(T), "target");
+                var property = Expression.Property(target, rule.Property);
+                var convert = Expression.Convert(property, typeof(object));
+                return Expression.Lambda<Func<T, object?>>(convert, target).Compile();
+            });
+        }
+
+        private static Action<T, object?> GetOrCreateSetter(DataMappingRule<T> rule)
+        {
+            return SetterCache.GetOrAdd(BuildAccessorCacheKey(rule), _ =>
+            {
+                var target = Expression.Parameter(typeof(T), "target");
+                var value = Expression.Parameter(typeof(object), "value");
+                var property = Expression.Property(target, rule.Property);
+                var assign = Expression.Assign(property, Expression.Convert(value, rule.Property.PropertyType));
+                return Expression.Lambda<Action<T, object?>>(assign, target, value).Compile();
+            });
+        }
+
+        private static string BuildAccessorCacheKey(DataMappingRule<T> rule)
+            => $"{typeof(T).FullName}:{rule.Property.DeclaringType?.FullName}:{rule.Property.Name}";
 
         private static IDataValue CreateValue(object raw, DataType type)
         {
