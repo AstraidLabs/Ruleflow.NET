@@ -4,99 +4,75 @@
 
 # ⚙️ Ruleflow.NET
 
-Ruleflow.NET is a flexible rule and validation framework for .NET 8. It lets you compose complex business logic with a fluent API while keeping application code clean. The engine supports dependency-aware execution, data mapping utilities and a lightweight event system.
+Ruleflow.NET je knihovna pro definici a spouštění validačních/business pravidel v .NET. Kombinuje fluent builder API, podporu závislostí mezi pravidly, jednoduchou integraci do DI a pomocné nástroje pro mapování dat.
 
-## ✨ Key Features
+## ✨ Co knihovna umí
 
-- 🚀 **Intuitive Fluent API** - Create complex validation rules with a natural, readable syntax
-- 🧠 **Conditional Logic** - Build sophisticated rule flows with if/then/else and switch expressions
-- 🔗 **Rule Dependencies** - Define rules that depend on the results of other rules
-- ⏱️ **Prioritized Execution** - Control the order of rule evaluation with priority settings
-- 📝 **Comprehensive Results** - Get detailed validation results with configurable severity levels
-- 🛡️ **Dependency Awareness** - Built-in dependency graph validation to prevent circular references
-- 🧹 **Clean Separation** - Keep your business logic separate from your application code
-- 📌 **Intelligent Rule References** - Use lightweight references that resolve rules from a registry when needed
-- 🔧 **Flexible Data Mapping** - Convert dictionaries to objects and back using the built-in DataAutoMapper
-- 🗂️ **Batch Validation** - Validate collections of inputs with `BatchValidator`
-- 🧱 **Composite Validators** - Merge results from multiple validators using `CompositeValidator`
-- 🤝 **Shared Validation Context** - Pass data and rule results between rules via `ValidationContext`
-- 🎯 **Event and Action Hooks** - Trigger custom actions or events from validation rules
+- Fluent buildery pro `Action`, `Dependent`, `Conditional`, `Switch` a `Event` pravidla.
+- Validaci přes `Validator<T>` i `DependencyAwareValidator<T>`.
+- Sdílený `ValidationContext` pro předávání výsledků mezi pravidly.
+- Slučování a dávkové vyhodnocení (`CompositeValidator`, `BatchValidator`).
+- Registraci přes `IServiceCollection` (`AddRuleflow<TInput>`).
+- Automatické načítání validačních atributů a mapování (`ValidationRuleAttribute`, `MapKeyAttribute`).
+- Data mapping mezi `Dictionary<string, string>` a objektem (`DataAutoMapper<T>`).
 
-## 🏗️ Architecture
-
-Ruleflow.NET is built around a set of core components:
-
-- **`IValidationRule<T>`** - Base interface for validation rules
-- **`IValidator<T>`** - Interface for validators that execute rules
-- **`ValidationContext`** - Shares data and rule results during validation
-- **`DependencyAwareValidator<T>`** - Handles rule dependencies and priorities
-- **`DataAutoMapper<T>`** - Maps dictionaries to typed objects
-- **`RuleReference<T>`** - Lightweight references that resolve rules from a registry
-
-## 🌐 Use Cases
-
-- **Form Validation** - Validate user input with complex business rules
-- **API Request Validation** - Ensure incoming requests meet your requirements
-- **Business Rule Processing** - Execute business logic in a structured, maintainable way
-- **Workflow Validation** - Verify that each step in a workflow can proceed
-- **Data Integrity Checks** - Keep your data consistent with your domain rules
-
-## ❓ Why Ruleflow.NET?
-
-- Clear separation of rules from application code
-- Reusable rules and validators with minimal boilerplate
-- Works with dependency injection for easy integration
-- Supports attribute-based configuration and fluent builders
-
-## 🚀 Getting started
-
-### 📦 Installation
+## 📦 Instalace
 
 ```bash
-# Package will be available on NuGet
 dotnet add package Ruleflow.NET
 ```
 
-### 🔰 Basic usage
+## 🚀 Rychlý start
 
 ```csharp
+using System;
+using Ruleflow.NET.Engine.Validation;
+using Ruleflow.NET.Engine.Validation.Core.Validators;
+
+public class Person
+{
+    public string Name { get; set; } = string.Empty;
+    public int Age { get; set; }
+}
+
 var ageRule = RuleflowExtensions.CreateRule<Person>()
+    .WithId("AgeRule")
     .WithAction(p =>
     {
         if (p.Age < 18)
             throw new ArgumentException("Person must be an adult");
     })
-    .WithMessage("Age validation failed")
     .Build();
 
-using Microsoft.Extensions.Logging;
-
-var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-var validator = new Validator<Person>(new[] { ageRule }, loggerFactory.CreateLogger<Validator<Person>>());
+var validator = new Validator<Person>(new[] { ageRule });
 var result = validator.CollectValidationResults(new Person { Name = "John", Age = 17 });
 
+Console.WriteLine(result.IsValid); // false
 foreach (var error in result.Errors)
     Console.WriteLine($"{error.Severity}: {error.Message}");
 ```
 
-### 🌍 Real-world example
+## 🧩 Pravidla se závislostmi
 
 ```csharp
+using System;
+using Ruleflow.NET.Engine.Validation;
+using Ruleflow.NET.Engine.Validation.Core.Validators;
+using Ruleflow.NET.Engine.Validation.Enums;
+
 public class SignUpModel
 {
-    public string Username { get; set; }
-    public string Email { get; set; }
-    public string Password { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
 }
 
 var usernameRule = RuleflowExtensions.CreateRule<SignUpModel>()
     .WithId("UsernameValidation")
     .WithAction(m =>
     {
-        if (string.IsNullOrWhiteSpace(m.Username))
-            throw new ArgumentException("Username is required");
-        if (m.Username.Length < 3)
-            throw new ArgumentException("Username must be at least 3 characters");
+        if (string.IsNullOrWhiteSpace(m.Username) || m.Username.Length < 3)
+            throw new ArgumentException("Username must have at least 3 characters");
     })
     .Build();
 
@@ -105,12 +81,12 @@ var passwordRule = RuleflowExtensions.CreateRule<SignUpModel>()
     .WithAction(m =>
     {
         if (string.IsNullOrWhiteSpace(m.Password) || m.Password.Length < 8)
-            throw new ArgumentException("Password must be at least 8 characters");
+            throw new ArgumentException("Password must have at least 8 characters");
     })
     .Build();
 
 var emailRule = RuleflowExtensions.CreateDependentRule<SignUpModel>("EmailValidation")
-    .DependsOn("UsernameValidation")
+    .DependsOn("UsernameValidation", "PasswordValidation")
     .WithDependencyType(DependencyType.RequiresAllSuccess)
     .WithAction(m =>
     {
@@ -119,82 +95,143 @@ var emailRule = RuleflowExtensions.CreateDependentRule<SignUpModel>("EmailValida
     })
     .Build();
 
-using Microsoft.Extensions.Logging;
+var validator = new DependencyAwareValidator<SignUpModel>(new[]
+{
+    usernameRule,
+    passwordRule,
+    emailRule
+});
 
-var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-var validator = new DependencyAwareValidator<SignUpModel>(
-    new[] { usernameRule, passwordRule, emailRule },
-    loggerFactory.CreateLogger<DependencyAwareValidator<SignUpModel>>());
-
-var signUp = new SignUpModel
+var result = validator.CollectValidationResults(new SignUpModel
 {
     Username = "jo",
-    Email = "invalid",
-    Password = "pw"
-};
-
-var result2 = validator.CollectValidationResults(signUp);
-
-foreach (var error in result2.Errors)
-    Console.WriteLine(error.Message);
+    Password = "pw",
+    Email = "invalid"
+});
 ```
 
-### 🔌 Dependency injection
+## 🔀 Conditional a Switch pravidla
+
+```csharp
+using System;
+using Ruleflow.NET.Engine.Validation;
+using Ruleflow.NET.Engine.Validation.Core.Validators;
+
+public class Order
+{
+    public decimal Amount { get; set; }
+    public string CountryCode { get; set; } = "CZ";
+}
+
+var conditionalRule = RuleflowExtensions.CreateConditionalRule<Order>(o => o.Amount > 1000)
+    .WithId("HighValueOrderRule")
+    .Then(b => b.WithAction(o =>
+    {
+        if (o.CountryCode != "CZ")
+            throw new ArgumentException("High value order must be domestic");
+    }))
+    .Else(b => b.WithAction(o =>
+    {
+        if (o.Amount < 0)
+            throw new ArgumentException("Amount cannot be negative");
+    }))
+    .Build();
+
+var switchRule = RuleflowExtensions.CreateSwitchRule<Order, string>(o => o.CountryCode)
+    .WithId("CountryRule")
+    .Case("CZ", b => b.WithAction(_ => { }))
+    .Case("SK", b => b.WithAction(_ => { }))
+    .Default(b => b.WithAction(_ => throw new ArgumentException("Unsupported country")))
+    .Build();
+
+var validator = new Validator<Order>(new[] { conditionalRule, switchRule });
+```
+
+## 🔔 Event pravidla
+
+```csharp
+using Ruleflow.NET.Engine.Events;
+using Ruleflow.NET.Engine.Validation;
+using Ruleflow.NET.Engine.Validation.Core.Validators;
+
+bool triggered = false;
+EventHub.Clear();
+EventHub.Register("OrderValidated", () => triggered = true);
+
+var eventRule = RuleflowExtensions.CreateEventRule<object>("OrderValidated").Build();
+var validator = new Validator<object>(new[] { eventRule });
+validator.CollectValidationResults(new object());
+
+// triggered == true
+```
+
+## 🧭 DI integrace (`Microsoft.Extensions.DependencyInjection`)
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
-
-var profile = AttributeRuleLoader.LoadProfile<Person>();
+using Ruleflow.NET.Engine.Validation.Interfaces;
+using Ruleflow.NET.Extensions;
 
 var services = new ServiceCollection();
-services.AddLogging(b => b.AddConsole());
-services.AddRuleflow<Person>(options => options.InitialRules = new[] { ageRule }, profile);
+services.AddLogging();
+
+services.AddRuleflow<Person>(options =>
+{
+    options.RegisterDefaultValidator = true;
+    options.AutoRegisterAttributeRules = true;
+    options.AutoRegisterMappings = true;
+});
+
 var provider = services.BuildServiceProvider();
+var validator = provider.GetRequiredService<IValidator<Person>>();
 ```
 
-### 🛠️ Implementing in your project
-
-1. Install the NuGet package
-2. Define your validation rules using the fluent builders or attributes
-3. Register Ruleflow in your dependency injection container
-4. Create a validator and call `CollectValidationResults`
-
-For a more detailed protocol of the recommended configuration process read the
-[`Ruleflow Codex`](docs/RuleflowCodex.md) document.
-
-## 📝 Logging
-
-Ruleflow uses **Microsoft.Extensions.Logging** for all internal messages. If no logger is configured, the
-library falls back to `NullLogger` so your application runs silently. To see logs in a console
-application, call `AddLogging()` when configuring your service collection:
+## 🗺️ Data mapping (`DataAutoMapper<T>`)
 
 ```csharp
-var services = new ServiceCollection();
-services.AddLogging(b => b.AddConsole());
-services.AddRuleflow<Person>();
+using System.Collections.Generic;
+using Ruleflow.NET.Engine.Data.Enums;
+using Ruleflow.NET.Engine.Data.Mapping;
+
+public class Person
+{
+    public string Name { get; set; } = string.Empty;
+    public int Age { get; set; }
+}
+
+var mappingRules = new[]
+{
+    new DataMappingRule<Person>(p => p.Name, "name", DataType.String, true),
+    new DataMappingRule<Person>(p => p.Age, "age", DataType.Int32, true)
+};
+
+var mapper = new DataAutoMapper<Person>(mappingRules);
+var context = new DataContext();
+
+var data = new Dictionary<string, string>
+{
+    ["name"] = "Jane",
+    ["age"] = "25"
+};
+
+var person = mapper.MapToObject(data, context);
+var serialized = mapper.MapToData(person, context);
 ```
 
-In GUI apps such as WPF you can plug in any logging framework (e.g., NLog, Serilog) and forward messages
-to a text box or other UI element.
-
-Additional examples can be found in the unit tests inside `Ruleflow.NET.Tests`.
-
-## 🗺️ Roadmap
-
-- better & simplistic configuration in project
-
-## 🧪 Building and tests
-
-Run the tests using the .NET SDK:
+## 🧪 Testy
 
 ```bash
 dotnet test
 ```
 
+## 📚 Dokumentace
+
+Doporučený postup konfigurace a rozšířené poznámky najdete v dokumentu [`Ruleflow Codex`](docs/RuleflowCodex.md).
+
 ## 🤝 Contributing
 
-Contributions and feedback are welcome. Feel free to open issues or submit pull requests.
+Issues i pull requesty jsou vítané.
 
 ## 📄 License
 
-This project is licensed under the [Apache License 2.0](LICENSE.txt).
+Projekt je licencován pod [Apache License 2.0](LICENSE.txt).
