@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using MediatR;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Ruleflow.NET.Engine.Events;
@@ -42,6 +43,7 @@ namespace Ruleflow.NET.Extensions
             configure?.Invoke(options);
 
             services.AddSingleton(options);
+            services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(ServiceCollectionExtensions).Assembly));
 
             services.AddSingleton<IRuleRegistry<TInput>>(sp =>
             {
