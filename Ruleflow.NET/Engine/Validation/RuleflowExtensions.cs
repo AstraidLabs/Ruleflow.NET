@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Ruleflow.NET.Engine.Validation.Core.Base;
 using Ruleflow.NET.Engine.Validation.Core.Builders;
+using Ruleflow.NET.Engine.Validation.Interfaces;
 
 namespace Ruleflow.NET.Engine.Validation
 {
@@ -13,5 +16,9 @@ namespace Ruleflow.NET.Engine.Validation
             where TKey : notnull => new SwitchRuleBuilder<T, TKey>(selector);
         public static EventTriggerRuleBuilder<T> CreateEventRule<T>(string eventName) =>
             new EventTriggerRuleBuilder<T>().WithEvent(eventName);
+        public static AsyncRuleBuilder<T> CreateAsyncRule<T>() => new AsyncRuleBuilder<T>();
+
+        public static IEnumerable<IAsyncValidationRule<T>> ToAsyncRules<T>(this IEnumerable<IValidationRule<T>> rules)
+            => rules.Select(r => new SyncToAsyncValidationRuleAdapter<T>(r));
     }
 }

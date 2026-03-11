@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Ruleflow.NET.Engine.Validation.Core.Base;
 using Ruleflow.NET.Engine.Validation.Core.Context;
+using Ruleflow.NET.Engine.Validation.Core.Execution;
 using Ruleflow.NET.Engine.Validation.Core.Results;
 using Ruleflow.NET.Engine.Validation.Enums;
 using Ruleflow.NET.Engine.Validation.Interfaces;
@@ -13,99 +14,65 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
 {
     public class DependencyAwareValidator<T> : IValidator<T>
     {
-        private readonly Dictionary<string, IValidationRule<T>> _rules;
+        private readonly ExecutionPlan<T> _executionPlan;
         private readonly ILogger<DependencyAwareValidator<T>> _logger;
 
         public DependencyAwareValidator(IEnumerable<IValidationRule<T>> rules, ILogger<DependencyAwareValidator<T>>? logger = null)
         {
-            _rules = rules.ToDictionary(r => r.Id);
+            var ruleMap = rules.ToDictionary(r => r.Id);
+            _executionPlan = ExecutionPlan<T>.CreateDependencyAware(ruleMap.Values);
             _logger = logger ?? NullLogger<DependencyAwareValidator<T>>.Instance;
-            DetectCycles();
-        }
-
-        private void DetectCycles()
-        {
-            var visiting = new HashSet<string>();
-            var visited = new HashSet<string>();
-
-            bool Visit(string id)
-            {
-                if (visiting.Contains(id)) return true;
-                if (!visited.Add(id)) return false;
-                visiting.Add(id);
-                if (_rules[id] is DependentValidationRule<T> dep)
-                {
-                    foreach (var d in dep.Dependencies)
-                    {
-                        if (_rules.ContainsKey(d) && Visit(d)) return true;
-                    }
-                }
-                visiting.Remove(id);
-                return false;
-            }
-
-            foreach (var id in _rules.Keys)
-                if (Visit(id))
-                    throw new InvalidOperationException("Circular dependency detected");
-        }
-
-        private ValidationResult ExecuteRule(IValidationRule<T> rule, T input, Dictionary<string, ValidationResult> cache)
-        {
-            if (cache.TryGetValue(rule.Id, out var cached)) return cached;
-
-            var context = ValidationContext.Instance;
-            var result = new ValidationResult();
-
-            if (rule is DependentValidationRule<T> dep)
-            {
-                var depResults = dep.Dependencies.Select(id => ExecuteRule(_rules[id], input, cache)).ToList();
-                bool allSuccess = depResults.All(r => r.IsValid);
-                bool anySuccess = depResults.Any(r => r.IsValid);
-                bool anyFailure = depResults.Any(r => !r.IsValid);
-                bool shouldExecute = dep.DependencyType switch
-                {
-                    DependencyType.RequiresAllSuccess => allSuccess,
-                    DependencyType.RequiresAnyFailure => anyFailure,
-                    DependencyType.RequiresAnySuccess => anySuccess,
-                    _ => true
-                };
-                if (!shouldExecute)
-                {
-                    context.RuleResults[rule.Id] = new RuleExecutionResult { Success = true };
-                    cache[rule.Id] = result;
-                    return result;
-                }
-            }
-
-            try
-            {
-                rule.Validate(input);
-                context.RuleResults[rule.Id] = new RuleExecutionResult { Success = true };
-                _logger.LogDebug("Rule {RuleId} executed successfully", rule.Id);
-            }
-            catch (Exception ex)
-            {
-                context.RuleResults[rule.Id] = new RuleExecutionResult { Success = false };
-                result.AddError(ex.Message, rule.Severity);
-                _logger.LogError(ex, "Rule {RuleId} failed: {Message}", rule.Id, ex.Message);
-            }
-
-            cache[rule.Id] = result;
-            return result;
         }
 
         public ValidationResult CollectValidationResults(T input)
         {
             _logger.LogInformation("Starting validation of {InputType}", typeof(T).Name);
-            var cache = new Dictionary<string, ValidationResult>();
             var final = new ValidationResult();
-            foreach (var rule in _rules.Values.OrderByDescending(r => r.Priority))
+            var context = ValidationContext.Instance;
+            var ruleOutcomes = new Dictionary<string, bool>();
+            foreach (var step in _executionPlan.Steps)
             {
-                var res = ExecuteRule(rule, input, cache);
-                final.AddErrors(res.Errors);
+                if (!ShouldExecute(step, ruleOutcomes))
+                {
+                    context.RuleResults[step.RuleId] = new RuleExecutionResult { Success = true };
+                    ruleOutcomes[step.RuleId] = true;
+                    continue;
+                }
+
+                try
+                {
+                    step.Execute(input);
+                    context.RuleResults[step.RuleId] = new RuleExecutionResult { Success = true };
+                    ruleOutcomes[step.RuleId] = true;
+                    _logger.LogDebug("Rule {RuleId} executed successfully", step.RuleId);
+                }
+                catch (Exception ex)
+                {
+                    context.RuleResults[step.RuleId] = new RuleExecutionResult { Success = false };
+                    ruleOutcomes[step.RuleId] = false;
+                    final.AddError(ex.Message, step.Severity, code: step.RuleId, path: step.RuleId);
+                    _logger.LogError(ex, "Rule {RuleId} failed: {Message}", step.RuleId, ex.Message);
+                }
             }
             _logger.LogInformation("Finished validation of {InputType}", typeof(T).Name);
             return final;
+        }
+
+        private static bool ShouldExecute(ExecutionPlanStep<T> step, IReadOnlyDictionary<string, bool> outcomes)
+        {
+            if (step.Dependencies.Count == 0 || step.DependencyType == null)
+            {
+                return true;
+            }
+
+            var dependencyOutcomes = step.Dependencies.Select(id => outcomes.TryGetValue(id, out var ok) && ok).ToArray();
+            return step.DependencyType.Value switch
+            {
+                DependencyType.RequiresAllSuccess => dependencyOutcomes.All(x => x),
+                DependencyType.RequiresAnyFailure => dependencyOutcomes.Any(x => !x),
+                DependencyType.RequiresAnySuccess => dependencyOutcomes.Any(x => x),
+                _ => true
+            };
         }
 
         public bool IsValid(T input) => CollectValidationResults(input).IsValid;

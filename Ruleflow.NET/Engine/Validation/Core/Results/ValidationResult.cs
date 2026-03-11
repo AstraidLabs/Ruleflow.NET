@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Collections.ObjectModel;
 using Ruleflow.NET.Engine.Validation.Enums;
+using Ruleflow.NET.Engine.Validation.Interfaces;
 
 namespace Ruleflow.NET.Engine.Validation.Core.Results
 {
@@ -106,6 +107,12 @@ namespace Ruleflow.NET.Engine.Validation.Core.Results
                 var ex = new AggregateException("Validace selhala s kritickými chybami");
                 throw ex;
             }
+        }
+
+        public IReadOnlyList<object> FormatErrors(IErrorFormatter formatter)
+        {
+            if (formatter == null) throw new ArgumentNullException(nameof(formatter));
+            return _errors.Select(formatter.Format).ToArray();
         }
     }
 }
