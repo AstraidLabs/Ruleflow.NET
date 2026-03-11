@@ -223,20 +223,20 @@ namespace Ruleflow.NET.Tests
         }
 
         /// <summary>
-        /// Test ověřuje, že pokus o přidání null kolekce chyb vyhodí výjimku NullReferenceException.
-        /// 
+        /// Test ověřuje, že pokus o přidání null kolekce chyb vyhodí výjimku ArgumentNullException.
+        ///
         /// Use case: Ochrana před chybami v kódu, kde by metoda AddErrors mohla být volána s null kolekcí,
         /// což by mohlo vést k neočekávanému chování. V produkčním kódu by měla být tato situace ošetřena.
         /// </summary>
         [TestMethod]
-        public void ValidationResult_AddErrors_WithNullCollection_ThrowsNullReferenceException()
+        public void ValidationResult_AddErrors_WithNullCollection_ThrowsArgumentNullException()
         {
             // Arrange
             var result = new ValidationResult();
             IEnumerable<ValidationError> nullErrors = null;
 
             // Act & Assert
-            Assert.ThrowsException<NullReferenceException>(() => result.AddErrors(nullErrors));
+            Assert.ThrowsException<ArgumentNullException>(() => result.AddErrors(nullErrors));
         }
 
         /// <summary>

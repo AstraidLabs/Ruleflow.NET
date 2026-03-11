@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using MediatR;
@@ -10,6 +11,7 @@ using Ruleflow.NET.Engine.Validation.Enums;
 using Ruleflow.NET.Extensions;
 using Ruleflow.NET.Engine.Registry.Interface;
 using Ruleflow.NET.Engine.Validation.Interfaces;
+using Ruleflow.NET.Engine.Validation.Core.Context;
 using Ruleflow.NET.Engine.Data.Enums;
 using Ruleflow.NET.Engine.Data.Mapping;
 using Ruleflow.NET.Engine.Events;
@@ -18,12 +20,31 @@ using Ruleflow.NET.Engine.Cqrs.Queries;
 
 namespace Ruleflow.NET.Tests
 {
+    // Attribute rule used by the AutoRegisterAttributeRules test.
+    // Must be a top-level (non-nested) class so the attribute scanner can find it.
+    public static class PersonAttributeRules
+    {
+        [ValidationRule("age.nonnegative", Priority = 1)]
+        public static void NonNegative(ServiceCollectionExtensionsTests.Person p)
+        {
+            if (p.Age < 0)
+                throw new ArgumentException("Age must be >= 0");
+        }
+    }
+
     [TestClass]
     public class ServiceCollectionExtensionsTests
     {
-        private class Person
+        public class Person
         {
             public int Age { get; set; }
+        }
+
+        [TestInitialize]
+        public void SetUp()
+        {
+            // Reset to default scoped mode before each test
+            ValidationContext.Mode = ValidationContextMode.ScopedAsyncFlow;
         }
 
         [TestMethod]
@@ -58,15 +79,42 @@ namespace Ruleflow.NET.Tests
         }
 
         [TestMethod]
-        public void AddRuleflow_RegistersValidationContext()
+        public void AddRuleflow_RegistersValidationContext_DefaultScopedMode()
         {
             var services = new ServiceCollection();
             services.AddRuleflow<Person>();
             var provider = services.BuildServiceProvider();
 
-            var context1 = provider.GetRequiredService<Ruleflow.NET.Engine.Validation.Core.Context.ValidationContext>();
-            var context2 = provider.GetRequiredService<Ruleflow.NET.Engine.Validation.Core.Context.ValidationContext>();
+            // In scoped (transient) mode, resolving ValidationContext works and is not null
+            var context1 = provider.GetRequiredService<ValidationContext>();
+            var context2 = provider.GetRequiredService<ValidationContext>();
+            Assert.IsNotNull(context1);
+            Assert.IsNotNull(context2);
+        }
+
+        [TestMethod]
+        public void AddRuleflow_RegistersValidationContext_LegacySingletonMode()
+        {
+            var services = new ServiceCollection();
+            services.AddRuleflow<Person>(o => o.UseLegacyGlobalValidationContext = true);
+            var provider = services.BuildServiceProvider();
+
+            var context1 = provider.GetRequiredService<ValidationContext>();
+            var context2 = provider.GetRequiredService<ValidationContext>();
+            Assert.IsNotNull(context1);
             Assert.AreSame(context1, context2);
+        }
+
+        [TestMethod]
+        public void AddRuleflow_RegistersValidationContextAccessor()
+        {
+            var services = new ServiceCollection();
+            services.AddRuleflow<Person>();
+            var provider = services.BuildServiceProvider();
+
+            var accessor = provider.GetRequiredService<IValidationContextAccessor>();
+            Assert.IsNotNull(accessor);
+            Assert.IsNotNull(accessor.Current);
         }
 
         [TestMethod]
@@ -125,6 +173,7 @@ namespace Ruleflow.NET.Tests
 
             Assert.AreNotSame(NullLogger<EventHub.EventHubLog>.Instance, EventHub.Logger);
         }
+
         [TestMethod]
         public async Task AddRuleflow_RegistersMediatorHandlers_ForRuleCommandsAndQueries()
         {
@@ -154,5 +203,25 @@ namespace Ruleflow.NET.Tests
             Assert.IsTrue(unregistered);
         }
 
+        [TestMethod]
+        public void AddRuleflow_AutoRegisterAttributeRules_IncludedInDefaultValidator()
+        {
+            var services = new ServiceCollection();
+            services.AddRuleflow<Person>(o =>
+            {
+                o.RegisterDefaultValidator = true;
+                o.AutoRegisterAttributeRules = true;
+                o.AssemblyFilters = new[] { typeof(PersonAttributeRules).Assembly.GetName().Name! };
+            });
+            var provider = services.BuildServiceProvider();
+
+            var validator = provider.GetRequiredService<IValidator<Person>>();
+            var result = validator.CollectValidationResults(new Person { Age = -1 });
+
+            Assert.IsFalse(result.IsValid);
+            Assert.AreEqual(1, result.Errors.Count);
+            Assert.AreEqual("age.nonnegative", result.Errors[0].Code);
+            Assert.IsTrue(result.Errors[0].Message.Contains("Age must be"));
+        }
     }
 }

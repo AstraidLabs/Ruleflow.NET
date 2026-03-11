@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,7 +10,7 @@ namespace Ruleflow.NET.Engine.Events
     /// </summary>
     public static class EventHub
     {
-        private static readonly Dictionary<string, List<Action>> _handlers = new();
+        private static readonly ConcurrentDictionary<string, ConcurrentBag<Action>> _handlers = new(StringComparer.Ordinal);
         public class EventHubLog {}
         public static ILogger<EventHubLog> Logger { get; private set; } = NullLogger<EventHubLog>.Instance;
 
@@ -24,13 +24,14 @@ namespace Ruleflow.NET.Engine.Events
         /// </summary>
         public static void Register(string eventName, Action handler)
         {
+            if (string.IsNullOrWhiteSpace(eventName))
+                throw new ArgumentException("Event name must not be null or whitespace.", nameof(eventName));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+
             Logger.LogInformation("Registering handler for event {Event}", eventName);
-            if (!_handlers.TryGetValue(eventName, out var list))
-            {
-                list = new List<Action>();
-                _handlers[eventName] = list;
-            }
-            list.Add(handler);
+            var bag = _handlers.GetOrAdd(eventName, _ => new ConcurrentBag<Action>());
+            bag.Add(handler);
         }
 
         /// <summary>
@@ -38,10 +39,13 @@ namespace Ruleflow.NET.Engine.Events
         /// </summary>
         public static void Trigger(string eventName)
         {
+            if (string.IsNullOrWhiteSpace(eventName))
+                throw new ArgumentException("Event name must not be null or whitespace.", nameof(eventName));
+
             Logger.LogInformation("Triggering event {Event}", eventName);
-            if (_handlers.TryGetValue(eventName, out var list))
+            if (_handlers.TryGetValue(eventName, out var bag))
             {
-                foreach (var h in list)
+                foreach (var h in bag)
                 {
                     try
                     {

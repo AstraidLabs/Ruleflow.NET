@@ -78,6 +78,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
 
         public ValidationResult CollectValidationResults(T input)
         {
+            using var scope = ValidationContextScope.Begin();
             _logger.LogInformation("Starting validation of {InputType}", typeof(T).Name);
             var final = new ValidationResult();
             var context = ValidationContext.Instance;

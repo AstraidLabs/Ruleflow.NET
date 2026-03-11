@@ -25,6 +25,37 @@ services.AddRuleflow<MyModel>(options =>
 
 You can restrict attribute scanning with `AssemblyFilters` or `NamespaceFilters` if needed.
 
+### Validation context behavior
+
+By default, each validation run gets its own `ValidationContext` (scoped per async flow). This means concurrent validations do not interfere with each other — properties and rule results are isolated between runs while remaining shared across rules within the same run.
+
+If you need the legacy global singleton behavior (a single `ValidationContext` shared across all runs), enable it via the options:
+
+```csharp
+services.AddRuleflow<MyModel>(options =>
+{
+    options.UseLegacyGlobalValidationContext = true;
+});
+```
+
+> **Rollback plan:** If issues appear in deployments after upgrading, set `UseLegacyGlobalValidationContext = true` for immediate mitigation.
+
+For singleton services that need access to the current validation context, inject `IValidationContextAccessor` instead of `ValidationContext` directly:
+
+```csharp
+public class MyService
+{
+    private readonly IValidationContextAccessor _contextAccessor;
+    public MyService(IValidationContextAccessor contextAccessor)
+        => _contextAccessor = contextAccessor;
+
+    public void DoWork()
+    {
+        var ctx = _contextAccessor.Current; // always returns the active context
+    }
+}
+```
+
 ## 3. Define rules
 
 Rules can be defined imperatively using the fluent builders or declaratively with attributes.
@@ -52,6 +83,8 @@ public static class MyRules
     }
 }
 ```
+
+When `AutoRegisterAttributeRules = true` and `RegisterDefaultValidator = true`, attribute-discovered rules are automatically included in the default `IValidator<TInput>`. Rules are deduplicated by `Id` so the same rule is never executed twice.
 
 ## 4. Create profiles (optional)
 

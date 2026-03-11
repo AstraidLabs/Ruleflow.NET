@@ -53,7 +53,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Results
         /// </summary>
         public void AddErrors(IEnumerable<ValidationError> errors)
         {
-            if (errors == null) throw new NullReferenceException();
+            if (errors == null) throw new ArgumentNullException(nameof(errors));
             foreach (var e in errors) AddError(e);
         }
 

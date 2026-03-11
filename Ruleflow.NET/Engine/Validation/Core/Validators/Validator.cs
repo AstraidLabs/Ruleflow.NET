@@ -30,6 +30,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
         /// </summary>
         public ValidationResult CollectValidationResults(T input)
         {
+            using var scope = ValidationContextScope.Begin();
             _logger.LogInformation("Starting validation of {InputType}", typeof(T).Name);
             var context = ValidationContext.Instance;
             var result = new ValidationResult();
