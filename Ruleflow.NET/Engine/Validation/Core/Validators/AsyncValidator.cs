@@ -24,6 +24,7 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
 
         public async Task<ValidationResult> CollectValidationResultsAsync(T input, CancellationToken cancellationToken = default)
         {
+            using var scope = ValidationContextScope.Begin();
             var context = ValidationContext.Instance;
             var result = new ValidationResult();
 

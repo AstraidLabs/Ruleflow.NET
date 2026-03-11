@@ -42,6 +42,16 @@ namespace Ruleflow.NET.Extensions
             var options = new RuleflowOptions<TInput>();
             configure?.Invoke(options);
 
+            // Apply validation context mode based on options
+            ValidationContext.Mode = options.UseLegacyGlobalValidationContext
+                ? ValidationContextMode.GlobalSingleton
+                : ValidationContextMode.ScopedAsyncFlow;
+
+            // Eagerly load attribute rules so they can be shared between registry and validator
+            var attributeRules = options.AutoRegisterAttributeRules
+                ? LoadAttributeRules(options).ToArray()
+                : Array.Empty<IValidationRule<TInput>>();
+
             services.AddSingleton(options);
             services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(ServiceCollectionExtensions).Assembly));
 
@@ -51,30 +61,27 @@ namespace Ruleflow.NET.Extensions
                 var logger = loggerFactory.CreateLogger<RuleRegistry<TInput>>();
                 var reg = new RuleRegistry<TInput>(options.InitialRules ?? Array.Empty<IRule<TInput>>(), logger);
 
-                // Load attribute based validation rules if requested
-                if (options.AutoRegisterAttributeRules)
+                // Register attribute-discovered rules as IRule<TInput> wrappers in the registry
+                foreach (var vr in attributeRules)
                 {
-                    foreach (var vr in LoadAttributeRules(options))
-                    {
-                        var wrapper = RuleBuilderFactory.CreateUnifiedRuleBuilder<TInput>()
-                            .WithRuleId(vr.Id)
-                            .WithPriority(vr.Priority)
-                            .WithValidation((input, ctx) =>
+                    var wrapper = RuleBuilderFactory.CreateUnifiedRuleBuilder<TInput>()
+                        .WithRuleId(vr.Id)
+                        .WithPriority(vr.Priority)
+                        .WithValidation((input, ctx) =>
+                        {
+                            try
                             {
-                                try
-                                {
-                                    vr.Validate(input);
-                                    return true;
-                                }
-                                catch
-                                {
-                                    return false;
-                                }
-                            })
-                            .Build();
+                                vr.Validate(input);
+                                return true;
+                            }
+                            catch
+                            {
+                                return false;
+                            }
+                        })
+                        .Build();
 
-                        reg.RegisterRule(wrapper);
-                    }
+                    reg.RegisterRule(wrapper);
                 }
 
                 EventHub.SetLogger(loggerFactory.CreateLogger<EventHub.EventHubLog>());
@@ -94,8 +101,19 @@ namespace Ruleflow.NET.Extensions
                 services.AddSingleton<IDataAutoMapper<TInput>>(_ => new DataAutoMapper<TInput>(mappingRules));
             }
 
-            // Register ValidationContext singleton so it can be injected where needed
-            services.AddSingleton(ValidationContext.Instance);
+            // Register ValidationContext - transient in scoped mode (returns per-run context),
+            // singleton in legacy mode (returns the global instance).
+            if (options.UseLegacyGlobalValidationContext)
+            {
+                services.AddSingleton<ValidationContext>(_ => ValidationContext.Instance);
+            }
+            else
+            {
+                services.AddTransient<ValidationContext>(_ => ValidationContext.Instance);
+            }
+
+            // Register IValidationContextAccessor as singleton - always safe since it delegates to Instance
+            services.AddSingleton<IValidationContextAccessor, ValidationContextAccessor>();
 
             // Register a default validator if requested by options
             if (options.RegisterDefaultValidator)
@@ -104,13 +122,27 @@ namespace Ruleflow.NET.Extensions
                 {
                     var reg = sp.GetRequiredService<IRuleRegistry<TInput>>();
                     var validationRules = new List<IValidationRule<TInput>>();
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+
                     foreach (var rule in reg.AllRules)
                     {
-                        if (rule is IValidationRule<TInput> vr)
+                        if (rule is IValidationRule<TInput> vr && seen.Add(vr.Id))
                             validationRules.Add(vr);
                     }
                     foreach (var profile in profiles)
-                        validationRules.AddRange(profile.ValidationRules);
+                    {
+                        foreach (var vr in profile.ValidationRules)
+                        {
+                            if (seen.Add(vr.Id))
+                                validationRules.Add(vr);
+                        }
+                    }
+                    // Include attribute-discovered validation rules (deduplicated)
+                    foreach (var vr in attributeRules)
+                    {
+                        if (seen.Add(vr.Id))
+                            validationRules.Add(vr);
+                    }
                     var loggerFactory = options.LoggerFactory ?? sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
                     var logger = loggerFactory.CreateLogger<Validator<TInput>>();
                     return new Validator<TInput>(validationRules, logger);

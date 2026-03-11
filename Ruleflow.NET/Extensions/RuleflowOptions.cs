@@ -49,5 +49,12 @@ namespace Ruleflow.NET.Extensions
         /// provider will be used, falling back to <see cref="NullLoggerFactory"/>.
         /// </summary>
         public ILoggerFactory? LoggerFactory { get; set; }
+
+        /// <summary>
+        /// When true, the legacy global singleton <see cref="Engine.Validation.Core.Context.ValidationContext"/>
+        /// is used instead of per-run scoped contexts. Default is false (scoped mode).
+        /// Set to true for backwards compatibility if your code relies on the global shared context.
+        /// </summary>
+        public bool UseLegacyGlobalValidationContext { get; set; } = false;
     }
 }

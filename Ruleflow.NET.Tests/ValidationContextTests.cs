@@ -1,4 +1,3 @@
-﻿// Modified ValidationContextTests implementation
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Ruleflow.NET.Engine.Validation;
 using Ruleflow.NET.Engine.Validation.Core.Base;
@@ -9,11 +8,12 @@ using Ruleflow.NET.Engine.Validation.Enums;
 using Ruleflow.NET.Engine.Validation.Interfaces;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace Ruleflow.NET.Tests
 {
     [TestClass]
-    [DoNotParallelize]
     public class ValidationContextTests
     {
         private class ShoppingCart
@@ -37,7 +37,9 @@ namespace Ruleflow.NET.Tests
         [TestInitialize]
         public void SetUp()
         {
-            // Clear the shared validation context before each test
+            // Ensure scoped mode for tests; the global fallback is cleared
+            // so legacy tests that read Instance outside a scope still work.
+            ValidationContext.Mode = ValidationContextMode.ScopedAsyncFlow;
             ValidationContext.Instance.Clear();
         }
 
@@ -45,7 +47,6 @@ namespace Ruleflow.NET.Tests
         public void ValidationContext_PropagatesProperty_BetweenRules()
         {
             // Arrange
-            // First rule checks cart items and saves calculated total to context
             var calculateTotalRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("CalculateTotalRule")
                 .WithAction(cart => {
@@ -54,11 +55,7 @@ namespace Ruleflow.NET.Tests
                     {
                         calculatedTotal += item.Price * item.Quantity;
                     }
-
-                    // Store calculated total in shared context for other rules to use
                     ValidationContext.Instance.Properties["CalculatedTotal"] = calculatedTotal;
-
-                    // Verify total matches the cart's total
                     if (Math.Abs(calculatedTotal - cart.TotalAmount) > 0.01m)
                     {
                         throw new ArgumentException($"Cart total mismatch. Expected: {calculatedTotal}, Actual: {cart.TotalAmount}");
@@ -66,14 +63,10 @@ namespace Ruleflow.NET.Tests
                 })
                 .Build();
 
-            // Testing a rule that depends on the context property but doesn't have a formal dependency
             var contextAccessRule = new ContextAwareTestRule("ContextAccessRule");
-
-            // Make sure rules are executed in the right order - calculate total first
             var rules = new List<IValidationRule<ShoppingCart>> { calculateTotalRule, contextAccessRule };
             var validator = new DependencyAwareValidator<ShoppingCart>(rules);
 
-            // Create a cart with correct total
             var cart = new ShoppingCart
             {
                 Id = 1,
@@ -82,7 +75,7 @@ namespace Ruleflow.NET.Tests
                     new CartItem { ProductId = 101, ProductName = "Product 1", Price = 10.99m, Quantity = 2 },
                     new CartItem { ProductId = 102, ProductName = "Product 2", Price = 24.99m, Quantity = 1 }
                 },
-                TotalAmount = 46.97m  // 10.99*2 + 24.99
+                TotalAmount = 46.97m
             };
 
             // Act
@@ -97,7 +90,6 @@ namespace Ruleflow.NET.Tests
         public void ValidationContext_PropagatesRuleResults_ToOtherRules()
         {
             // Arrange
-            // First rule checks if cart has items
             var hasItemsRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("HasItemsRule")
                 .WithAction(cart => {
@@ -106,27 +98,22 @@ namespace Ruleflow.NET.Tests
                 })
                 .Build();
 
-            // Second rule checks if promo code is valid
             var promoCodeRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("PromoCodeRule")
                 .WithAction(cart => {
                     if (string.IsNullOrEmpty(cart.PromoCode))
-                        return; // No promo code is valid
-
+                        return;
                     if (cart.PromoCode != "VALID10" && cart.PromoCode != "VALID20")
                         throw new ArgumentException("Invalid promo code");
                 })
                 .Build();
 
-            // Third rule checks if both previous rules have succeeded
             var resultCheckRule = new RuleResultCheckingRule("ResultCheckRule",
                 new[] { "HasItemsRule", "PromoCodeRule" });
 
-            // Order matters - execute the rules that are being checked first
             var rules = new List<IValidationRule<ShoppingCart>> { hasItemsRule, promoCodeRule, resultCheckRule };
             var validator = new DependencyAwareValidator<ShoppingCart>(rules);
 
-            // Cart with items and valid promo code
             var validCart = new ShoppingCart
             {
                 Id = 1,
@@ -146,7 +133,6 @@ namespace Ruleflow.NET.Tests
         public void ValidationContext_AllowsRules_ToCheckFailedDependencies()
         {
             // Arrange
-            // Rule that will fail
             var cartValidRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("CartValidRule")
                 .WithAction(cart => {
@@ -154,10 +140,7 @@ namespace Ruleflow.NET.Tests
                 })
                 .Build();
 
-            // Rule that checks if the first rule failed
             var failureCheckRule = new RuleFailureCheckingRule("FailureCheckRule", "CartValidRule");
-
-            // Order matters - execute the rule that is being checked first
             var rules = new List<IValidationRule<ShoppingCart>> { cartValidRule, failureCheckRule };
             var validator = new DependencyAwareValidator<ShoppingCart>(rules);
 
@@ -176,19 +159,14 @@ namespace Ruleflow.NET.Tests
         [TestMethod]
         public void ValidationContext_CanStoreAndRetrieveCustomProperties()
         {
-            // Arrange
-            // Create a custom validation context
             var context = new ValidationContext();
 
-            // Add various property types
             context.Properties["StringValue"] = "Test String";
             context.Properties["IntValue"] = 42;
             context.Properties["DateValue"] = new DateTime(2025, 4, 24);
             context.Properties["ListValue"] = new List<string> { "One", "Two", "Three" };
             context.Properties["ObjectValue"] = new CartItem { ProductId = 101, Price = 19.99m };
 
-            // Act & Assert
-            // Verify property retrieval
             Assert.AreEqual("Test String", context.Properties["StringValue"]);
             Assert.AreEqual(42, context.Properties["IntValue"]);
             Assert.AreEqual(new DateTime(2025, 4, 24), context.Properties["DateValue"]);
@@ -207,63 +185,47 @@ namespace Ruleflow.NET.Tests
         [TestMethod]
         public void ValidationContext_HandlesNonExistentProperties_Gracefully()
         {
-            // Arrange
             var context = new ValidationContext();
             context.Properties["ExistingKey"] = "Value";
 
-            // Act & Assert
-            // Accessing non-existent key should throw KeyNotFoundException
             Assert.ThrowsException<KeyNotFoundException>(() => {
                 var value = context.Properties["NonExistentKey"];
             });
 
-            // Existing key should work
             Assert.AreEqual("Value", context.Properties["ExistingKey"]);
         }
 
         [TestMethod]
         public void ValidationContext_GetErrorsBySeverity_FiltersCorrectedlyByLevel()
         {
-            // Arrange
-            // Create rules with different severity levels
             var verboseRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("VerboseRule")
                 .WithSeverity(ValidationSeverity.Verbose)
-                .WithAction(cart => {
-                    throw new ArgumentException("Verbose level message");
-                })
+                .WithAction(cart => { throw new ArgumentException("Verbose level message"); })
                 .Build();
 
             var infoRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("InfoRule")
                 .WithSeverity(ValidationSeverity.Information)
-                .WithAction(cart => {
-                    throw new ArgumentException("Information level message");
-                })
+                .WithAction(cart => { throw new ArgumentException("Information level message"); })
                 .Build();
 
             var warningRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("WarningRule")
                 .WithSeverity(ValidationSeverity.Warning)
-                .WithAction(cart => {
-                    throw new ArgumentException("Warning level message");
-                })
+                .WithAction(cart => { throw new ArgumentException("Warning level message"); })
                 .Build();
 
             var errorRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("ErrorRule")
                 .WithSeverity(ValidationSeverity.Error)
-                .WithAction(cart => {
-                    throw new ArgumentException("Error level message");
-                })
+                .WithAction(cart => { throw new ArgumentException("Error level message"); })
                 .Build();
 
             var criticalRule = RuleflowExtensions.CreateRule<ShoppingCart>()
                 .WithId("CriticalRule")
                 .WithSeverity(ValidationSeverity.Critical)
-                .WithAction(cart => {
-                    throw new ArgumentException("Critical level message");
-                })
+                .WithAction(cart => { throw new ArgumentException("Critical level message"); })
                 .Build();
 
             var validator = new DependencyAwareValidator<ShoppingCart>(
@@ -271,34 +233,78 @@ namespace Ruleflow.NET.Tests
 
             var cart = new ShoppingCart { Id = 1 };
 
-            // Act
             var result = validator.CollectValidationResults(cart);
 
-            // Assert
             Assert.IsFalse(result.IsValid);
             Assert.AreEqual(5, result.Errors.Count);
 
-            // Check filtered collections by severity
-            var verboseErrors = result.GetErrorsBySeverity(ValidationSeverity.Verbose);
-            var infoErrors = result.GetErrorsBySeverity(ValidationSeverity.Information);
-            var warningErrors = result.GetErrorsBySeverity(ValidationSeverity.Warning);
-            var errorErrors = result.GetErrorsBySeverity(ValidationSeverity.Error);
-            var criticalErrors = result.GetErrorsBySeverity(ValidationSeverity.Critical);
+            Assert.AreEqual(1, result.GetErrorsBySeverity(ValidationSeverity.Verbose).Count());
+            Assert.AreEqual(1, result.GetErrorsBySeverity(ValidationSeverity.Information).Count());
+            Assert.AreEqual(1, result.GetErrorsBySeverity(ValidationSeverity.Warning).Count());
+            Assert.AreEqual(1, result.GetErrorsBySeverity(ValidationSeverity.Error).Count());
+            Assert.AreEqual(1, result.GetErrorsBySeverity(ValidationSeverity.Critical).Count());
 
-            Assert.AreEqual(1, System.Linq.Enumerable.Count(verboseErrors));
-            Assert.AreEqual(1, System.Linq.Enumerable.Count(infoErrors));
-            Assert.AreEqual(1, System.Linq.Enumerable.Count(warningErrors));
-            Assert.AreEqual(1, System.Linq.Enumerable.Count(errorErrors));
-            Assert.AreEqual(1, System.Linq.Enumerable.Count(criticalErrors));
-
-            Assert.AreEqual("Verbose level message", System.Linq.Enumerable.First(verboseErrors).Message);
-            Assert.AreEqual("Information level message", System.Linq.Enumerable.First(infoErrors).Message);
-            Assert.AreEqual("Warning level message", System.Linq.Enumerable.First(warningErrors).Message);
-            Assert.AreEqual("Error level message", System.Linq.Enumerable.First(errorErrors).Message);
-            Assert.AreEqual("Critical level message", System.Linq.Enumerable.First(criticalErrors).Message);
+            Assert.AreEqual("Verbose level message", result.GetErrorsBySeverity(ValidationSeverity.Verbose).First().Message);
+            Assert.AreEqual("Information level message", result.GetErrorsBySeverity(ValidationSeverity.Information).First().Message);
+            Assert.AreEqual("Warning level message", result.GetErrorsBySeverity(ValidationSeverity.Warning).First().Message);
+            Assert.AreEqual("Error level message", result.GetErrorsBySeverity(ValidationSeverity.Error).First().Message);
+            Assert.AreEqual("Critical level message", result.GetErrorsBySeverity(ValidationSeverity.Critical).First().Message);
         }
 
-        // Helper class for testing if context properties can be accessed
+        [TestMethod]
+        public async Task ValidationContext_Isolated_BetweenConcurrentRuns()
+        {
+            // This test verifies that concurrent validation runs do not interfere with each other.
+            // With the old global singleton, concurrent runs would overwrite each other's RunId,
+            // causing mismatches. With scoped contexts this works correctly.
+            ValidationContext.Mode = ValidationContextMode.ScopedAsyncFlow;
+
+            const int concurrentRuns = 100;
+            var tasks = new Task<ValidationResult>[concurrentRuns];
+
+            for (int i = 0; i < concurrentRuns; i++)
+            {
+                var runId = $"run-{i}";
+                tasks[i] = Task.Run(() =>
+                {
+                    var storeRule = RuleflowExtensions.CreateRule<ShoppingCart>()
+                        .WithId("StoreRunId")
+                        .WithAction(cart =>
+                        {
+                            ValidationContext.Instance.Properties["RunId"] = runId;
+                        })
+                        .Build();
+
+                    var checkRule = RuleflowExtensions.CreateRule<ShoppingCart>()
+                        .WithId("CheckRunId")
+                        .WithAction(cart =>
+                        {
+                            if (!ValidationContext.Instance.Properties.TryGetValue("RunId", out var stored)
+                                || (string)stored! != runId)
+                            {
+                                throw new InvalidOperationException(
+                                    $"RunId mismatch: expected '{runId}', got '{stored}'");
+                            }
+                        })
+                        .Build();
+
+                    var validator = new Validator<ShoppingCart>(new[] { storeRule, checkRule });
+                    return validator.CollectValidationResults(new ShoppingCart { Id = 1 });
+                });
+            }
+
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var result in results)
+            {
+                Assert.IsTrue(result.IsValid,
+                    "Concurrent validation run failed — context isolation is broken. Errors: "
+                    + string.Join("; ", result.Errors.Select(e => e.Message)));
+            }
+        }
+
+        // Helper classes
+
         private class ContextAwareTestRule : IdentifiableValidationRule<ShoppingCart>
         {
             public bool ContextAccessSuccessful { get; private set; }
@@ -309,11 +315,10 @@ namespace Ruleflow.NET.Tests
 
             public override void Validate(ShoppingCart input)
             {
-                // Use ValidationContext.Instance to access the shared context
                 var context = ValidationContext.Instance;
                 if (context.Properties.TryGetValue("CalculatedTotal", out var calculatedTotal))
                 {
-                    decimal total = (decimal)calculatedTotal;
+                    decimal total = (decimal)calculatedTotal!;
                     ContextAccessSuccessful = Math.Abs(total - input.TotalAmount) <= 0.01m;
                 }
                 else
@@ -328,7 +333,6 @@ namespace Ruleflow.NET.Tests
             }
         }
 
-        // Helper class for testing if rule results can be accessed
         private class RuleResultCheckingRule : IdentifiableValidationRule<ShoppingCart>
         {
             private readonly string[] _rulesToCheck;
@@ -343,7 +347,6 @@ namespace Ruleflow.NET.Tests
 
             public override void Validate(ShoppingCart input)
             {
-                // Use ValidationContext.Instance to access the shared context
                 var context = ValidationContext.Instance;
 
                 AllRulesSucceeded = true;
@@ -358,7 +361,6 @@ namespace Ruleflow.NET.Tests
             }
         }
 
-        // Helper class for checking if a rule failure can be detected
         private class RuleFailureCheckingRule : IdentifiableValidationRule<ShoppingCart>
         {
             private readonly string _ruleToCheck;
@@ -373,7 +375,6 @@ namespace Ruleflow.NET.Tests
 
             public override void Validate(ShoppingCart input)
             {
-                // Use ValidationContext.Instance to access the shared context
                 var context = ValidationContext.Instance;
 
                 if (context.RuleResults.TryGetValue(_ruleToCheck, out var result) && !result.Success)
