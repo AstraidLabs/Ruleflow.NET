@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 
 namespace Ruleflow.NET.Engine.Validation.Core.Context
@@ -12,8 +14,8 @@ namespace Ruleflow.NET.Engine.Validation.Core.Context
         private static readonly ValidationContext _instance = new ValidationContext();
         public static ValidationContext Instance => _instance;
 
-        public Dictionary<string, object> Properties { get; } = new();
-        public Dictionary<string, RuleExecutionResult> RuleResults { get; } = new();
+        public ConcurrentDictionary<string, object> Properties { get; } = new(StringComparer.Ordinal);
+        public ConcurrentDictionary<string, RuleExecutionResult> RuleResults { get; } = new(StringComparer.Ordinal);
 
         public void Clear()
         {
