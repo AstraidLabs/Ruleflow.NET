@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Ruleflow.NET.Engine.Validation.Core.Base;
 using Ruleflow.NET.Engine.Validation.Core.Context;
+using Ruleflow.NET.Engine.Validation.Core.Execution;
 using Ruleflow.NET.Engine.Validation.Core.Results;
 using Ruleflow.NET.Engine.Validation.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -15,12 +16,12 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
     /// </summary>
     public class Validator<T> : IValidator<T>
     {
-        private readonly List<IValidationRule<T>> _rules;
+        private readonly ExecutionPlan<T> _executionPlan;
         private readonly ILogger<Validator<T>> _logger;
 
         public Validator(IEnumerable<IValidationRule<T>> rules, ILogger<Validator<T>>? logger = null)
         {
-            _rules = rules.ToList();
+            _executionPlan = ExecutionPlan<T>.CreateSequential(rules);
             _logger = logger ?? NullLogger<Validator<T>>.Instance;
         }
 
@@ -32,19 +33,19 @@ namespace Ruleflow.NET.Engine.Validation.Core.Validators
             _logger.LogInformation("Starting validation of {InputType}", typeof(T).Name);
             var context = ValidationContext.Instance;
             var result = new ValidationResult();
-            foreach (var rule in _rules.OrderByDescending(r => r.Priority))
+            foreach (var step in _executionPlan.Steps)
             {
                 try
                 {
-                    rule.Validate(input);
-                    context.RuleResults[rule.Id] = new RuleExecutionResult { Success = true };
-                    _logger.LogDebug("Rule {RuleId} executed successfully", rule.Id);
+                    step.Execute(input);
+                    context.RuleResults[step.RuleId] = new RuleExecutionResult { Success = true };
+                    _logger.LogDebug("Rule {RuleId} executed successfully", step.RuleId);
                 }
                 catch (Exception ex)
                 {
-                    context.RuleResults[rule.Id] = new RuleExecutionResult { Success = false };
-                    result.AddError(ex.Message, rule.Severity);
-                    _logger.LogError(ex, "Rule {RuleId} failed: {Message}", rule.Id, ex.Message);
+                    context.RuleResults[step.RuleId] = new RuleExecutionResult { Success = false };
+                    result.AddError(ex.Message, step.Severity, code: step.RuleId, path: step.RuleId);
+                    _logger.LogError(ex, "Rule {RuleId} failed: {Message}", step.RuleId, ex.Message);
                 }
             }
             _logger.LogInformation("Finished validation of {InputType}", typeof(T).Name);
