@@ -2,6 +2,7 @@
 using Ruleflow.NET.Engine.Validation;
 using Ruleflow.NET.Engine.Validation.Core.Validators;
 using Ruleflow.NET.Engine.Validation.Enums;
+using Ruleflow.NET.Engine.Validation.Core.Context;
 using Ruleflow.NET.Engine.Validation.Interfaces;
 using System;
 using System.Collections.Generic;
@@ -421,6 +422,44 @@ namespace Ruleflow.NET.Tests
 
             Assert.IsTrue(result.IsValid);
             CollectionAssert.AreEqual(new[] { "RuleA", "RuleB", "RuleC" }, executionOrder);
+        }
+
+
+        [TestMethod]
+        public void DependencyAwareValidator_ParallelStages_AllowsSharedValidationContextWrites()
+        {
+            var context = ValidationContext.Instance;
+            context.Clear();
+
+            var leftRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("Left")
+                .WithAction(_ =>
+                {
+                    context.Properties["Left"] = "ok";
+                })
+                .Build();
+
+            var rightRule = RuleflowExtensions.CreateRule<UserProfile>()
+                .WithId("Right")
+                .WithAction(_ =>
+                {
+                    context.Properties["Right"] = "ok";
+                })
+                .Build();
+
+            var validator = new DependencyAwareValidator<UserProfile>(
+                new[] { leftRule, rightRule },
+                options: new DependencyAwareValidatorOptions<UserProfile>
+                {
+                    EnableParallelStages = true,
+                    MaxDegreeOfParallelism = 2
+                });
+
+            var result = validator.CollectValidationResults(new UserProfile { Username = "john", Email = "john@example.com" });
+
+            Assert.IsTrue(result.IsValid);
+            Assert.AreEqual("ok", context.Properties["Left"]);
+            Assert.AreEqual("ok", context.Properties["Right"]);
         }
 
         [TestMethod]
