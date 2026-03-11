@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Collections.ObjectModel;
 using Ruleflow.NET.Engine.Validation.Enums;
 
 namespace Ruleflow.NET.Engine.Validation.Core.Results
@@ -30,10 +31,19 @@ namespace Ruleflow.NET.Engine.Validation.Core.Results
         /// Vytvoří a přidá chybovou zprávu podle zadaných parametrů.
         /// <para>Creates and adds a validation error with the given information.</para>
         /// </summary>
-        public void AddError(string message, ValidationSeverity severity, string? code = null, object? context = null)
+        public void AddError(
+            string message,
+            ValidationSeverity severity,
+            string? code = null,
+            object? context = null,
+            string? path = null,
+            IReadOnlyDictionary<string, object?>? metadata = null)
         {
             if (message == null) throw new ArgumentNullException(nameof(message));
-            _errors.Add(new ValidationError(message, severity, code, context));
+            var readonlyMetadata = metadata == null
+                ? null
+                : new ReadOnlyDictionary<string, object?>(new Dictionary<string, object?>(metadata));
+            _errors.Add(new ValidationError(message, severity, code, context, path, readonlyMetadata));
         }
 
         /// <summary>

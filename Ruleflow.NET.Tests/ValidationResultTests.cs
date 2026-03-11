@@ -400,6 +400,54 @@ namespace Ruleflow.NET.Tests
             Assert.AreEqual("Test", retrievedContext.Name);
         }
 
+
+        [TestMethod]
+        public void ValidationResult_AddError_WithCodePathAndMetadata_StoresStructuredErrorData()
+        {
+            // Arrange
+            var result = new ValidationResult();
+            var metadata = new Dictionary<string, object?>
+            {
+                ["field"] = "Email",
+                ["attempt"] = 2
+            };
+
+            // Act
+            result.AddError(
+                "Invalid email",
+                ValidationSeverity.Error,
+                code: "VAL-EMAIL-001",
+                path: "Order.Customer.Email",
+                metadata: metadata);
+
+            // Assert
+            var error = result.Errors.Single();
+            Assert.AreEqual("VAL-EMAIL-001", error.Code);
+            Assert.AreEqual("Order.Customer.Email", error.Path);
+            Assert.AreEqual("Email", error.Metadata["field"]);
+            Assert.AreEqual(2, error.Metadata["attempt"]);
+        }
+
+        [TestMethod]
+        public void ValidationResult_AddError_WithMetadata_CopiesInputDictionary()
+        {
+            // Arrange
+            var result = new ValidationResult();
+            var metadata = new Dictionary<string, object?> { ["attempt"] = 1 };
+
+            // Act
+            result.AddError("Invalid", ValidationSeverity.Error, metadata: metadata);
+            metadata["attempt"] = 99;
+
+            // Assert
+            var error = result.Errors.Single();
+            Assert.AreEqual(1, error.Metadata["attempt"]);
+            Assert.ThrowsException<NotSupportedException>(() =>
+            {
+                ((IDictionary<string, object?>)error.Metadata).Add("new", "value");
+            });
+        }
+
         // Helper class for context testing
         private class TestContextObject
         {
