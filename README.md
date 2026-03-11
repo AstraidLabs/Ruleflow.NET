@@ -16,6 +16,10 @@ Ruleflow.NET je knihovna pro definici a spouštění validačních/business prav
 - Automatické načítání validačních atributů a mapování (`ValidationRuleAttribute`, `MapKeyAttribute`).
 - Data mapping mezi `Dictionary<string, string>` a objektem (`DataAutoMapper<T>`).
 
+## 🛠️ Návrh dalších vylepšení enginu
+
+Detailní návrh roadmapy je v dokumentu [`docs/EngineImprovements.md`](docs/EngineImprovements.md).
+
 ## 📦 Instalace
 
 ```bash
